@@ -371,6 +371,10 @@ def init_session_state():
         st.session_state["unstructured_col"] = "Report"
     if "unstructured_text_height" not in st.session_state:
         st.session_state["unstructured_text_height"] = 500
+    if "evaluation_column_height" not in st.session_state:
+        st.session_state["evaluation_column_height"] = 600
+    if "text_column_height" not in st.session_state:
+        st.session_state["text_column_height"] = 600
     if "show_json_for_current_row" not in st.session_state:
         st.session_state["show_json_for_current_row"] = False
     if "view_mode" not in st.session_state:
@@ -912,6 +916,56 @@ def render_search_view(non_skipped_cols, row_data):
         st.info("Enter a search term to find specific fields")
 
 
+def render_all_fields_view_in_sidebar(non_skipped_cols, row_data):
+    """
+    Render all fields at the bottom of the sidebar for evaluation
+    """
+    if not non_skipped_cols:
+        st.sidebar.warning("No fields to evaluate after applying skip patterns.")
+        return
+    
+    st.sidebar.write("---")
+    st.sidebar.subheader("Field Evaluation")
+    
+    # Group fields by category for better organization
+    categories = group_fields_by_category(non_skipped_cols)
+    
+    for category, fields in categories.items():
+        with st.sidebar.expander(f"{category} ({len(fields)} fields)", expanded=False):
+            for field in fields:
+                current_value = row_data[field]
+                eval_col = field + "_evaluation"
+                current_eval = row_data[eval_col]
+                
+                # Format the display name
+                display_name = get_field_display_name(field)
+                
+                # Background color based on evaluation
+                bg_color = EVALUATION_COLORS.get(current_eval, "#FFFFFF") if pd.notna(current_eval) else "#FFFFFF"
+                
+                st.sidebar.markdown(
+                    f"""
+                    <div style="background-color: {bg_color}; padding: 8px; border-radius: 5px; margin-bottom: 8px;">
+                        <p><strong>{display_name}</strong></p>
+                        <p style="font-size:0.9em">Value: {current_value if pd.notna(current_value) else 'None'}</p>
+                        <p style="font-size:0.9em">Evaluation: {current_eval if pd.notna(current_eval) else 'Not evaluated'}</p>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
+                
+                # Evaluation buttons in sidebar
+                eval_cols = st.sidebar.columns(len(EVALUATION_LABELS))
+                for i, label in enumerate(EVALUATION_LABELS):
+                    with eval_cols[i]:
+                        st.sidebar.button(
+                            label, 
+                            key=f"sidebar_eval_{field}_{label}", 
+                            on_click=set_evaluation, 
+                            args=(label, field)
+                        )
+
+
 def render_all_fields_view(non_skipped_cols, row_data):
     """
     Render all fields at once for evaluation
@@ -976,6 +1030,18 @@ def app():
     st.set_page_config(page_title="Echo Report Evaluation", layout="wide")
     init_session_state()
 
+    # Custom CSS for container styling
+    st.markdown("""
+    <style>
+    div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column"] > div[data-testid="stVerticalBlock"] {
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 15px;
+        background-color: #fafafa;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     # ============= SIDEBAR =============
     st.sidebar.title("Echo Report Evaluation")
     
@@ -1006,7 +1072,25 @@ def app():
         value=st.session_state["unstructured_col"]
     )
 
-    # 2) Configurable text-area height
+    # 2) Configurable column heights
+    st.sidebar.subheader("Column Heights")
+    st.session_state["evaluation_column_height"] = st.sidebar.number_input(
+        "Evaluation Column Height (px)",
+        min_value=300,
+        max_value=2000,
+        value=st.session_state["evaluation_column_height"],
+        step=50
+    )
+    
+    st.session_state["text_column_height"] = st.sidebar.number_input(
+        "Text Column Height (px)",
+        min_value=300,
+        max_value=2000,
+        value=st.session_state["text_column_height"],
+        step=50
+    )
+    
+    # 3) Configurable text-area height
     st.session_state["unstructured_text_height"] = st.sidebar.number_input(
         "Unstructured Text Height (px)",
         min_value=100,
@@ -1015,12 +1099,12 @@ def app():
         step=50
     )
 
-    # 3) Comma-separated skip patterns
+    # 4) Comma-separated skip patterns
     skip_str = st.sidebar.text_input("Skip columns ending with (comma-separated)", "")
     # Convert user input to a list of patterns
     st.session_state["skip_list"] = [x.strip() for x in skip_str.split(",") if x.strip()]
     
-    # 4) View mode selection
+    # 5) View mode selection
     view_mode = st.sidebar.radio(
         "View Mode",
         options=["Field by Field", "By Category", "Search Fields", "Show All Fields"],
@@ -1102,41 +1186,33 @@ def app():
     
     st.write("---")  # line after row nav
 
-    # For "Show All Fields" view mode, use a special layout with fixed right column
+    # Create a two-column layout
+    left_col, right_col = st.columns([1, 1])
+    
+    # Special handling for "Show All Fields" view mode
     if st.session_state["view_mode"] == "all_fields":
-        # Create a container for the scrollable left column
-        left_container = st.container()
+        # Left column with scrollable fields
+        with left_col.container(height=st.session_state["evaluation_column_height"], border=True):
+            # Action buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                st.button("Mark Row as Reviewed", on_click=mark_reviewed)
+            with col2:
+                st.button("Show/Hide JSON", on_click=toggle_show_json)
+            
+            st.subheader("Field Evaluation")
+            
+            # Group fields by category
+            categories = group_fields_by_category(non_skipped_cols)
+            
+            # Render fields by category
+            for category, fields in categories.items():
+                with st.expander(f"{category} ({len(fields)} fields)", expanded=True):
+                    for field in fields:
+                        render_field_value_and_evaluation(field, row_data)
         
-        # Create a container for the fixed right column
-        right_container = st.container()
-        
-        # Use columns with custom CSS to make left column scrollable and right column fixed
-        st.markdown("""
-        <style>
-        .fixed-right {
-            position: fixed;
-            right: 2rem;
-            width: 45%;
-            top: 15rem;
-            max-height: calc(100vh - 20rem);
-            overflow-y: auto;
-            background: white;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            z-index: 1000;
-        }
-        .scrollable-left {
-            width: 50%;
-            padding-right: 2rem;
-            overflow-y: auto;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
-        # Render the unstructured text in the fixed right column
-        with right_container:
-            st.markdown('<div class="fixed-right">', unsafe_allow_html=True)
+        # Right column with unstructured text
+        with right_col.container(height=st.session_state["text_column_height"], border=True):
             st.subheader("Unstructured Text")
             if unstructured_col in df.columns:
                 unstructured_text = row_data[unstructured_col]
@@ -1148,20 +1224,7 @@ def app():
                 )
             else:
                 st.error(f"Column '{unstructured_col}' not found in the data.")
-            st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Render the fields in the scrollable left column
-        with left_container:
-            st.markdown('<div class="scrollable-left">', unsafe_allow_html=True)
-            # Action buttons
-            col1, col2 = st.columns(2)
-            with col1:
-                st.button("Mark Row as Reviewed", on_click=mark_reviewed)
-            with col2:
-                st.button("Show/Hide JSON", on_click=toggle_show_json)
-            
-            render_all_fields_view(non_skipped_cols, row_data)
-            
+                
             # Show JSON if requested
             if st.session_state["show_json_for_current_row"]:
                 with st.expander("Pydantic JSON", expanded=True):
@@ -1172,12 +1235,9 @@ def app():
                     except Exception as e:
                         st.error(f"Error building EchoReport: {e}")
                         st.json(nested_dict)  # Show the raw dictionary instead
-            st.markdown('</div>', unsafe_allow_html=True)
     else:
         # Use regular two-column layout for other view modes
-        left_col, right_col = st.columns([1,1])
-
-        with left_col:
+        with left_col.container(height=st.session_state["evaluation_column_height"], border=True):
             # Action buttons
             col1, col2 = st.columns(2)
             with col1:
@@ -1204,7 +1264,7 @@ def app():
                         st.error(f"Error building EchoReport: {e}")
                         st.json(nested_dict)  # Show the raw dictionary instead
 
-        with right_col:
+        with right_col.container(height=st.session_state["text_column_height"], border=True):
             st.subheader("Unstructured Text")
             if unstructured_col in df.columns:
                 unstructured_text = row_data[unstructured_col]
